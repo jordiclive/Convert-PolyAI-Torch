@@ -7,7 +7,10 @@ import torch
 from sentencepiece import SentencePieceProcessor
 from torch.nn.functional import pad
 from torch.utils.data import DataLoader
+from src.config import ConveRTTrainConfig
 
+
+config = ConveRTTrainConfig()
 
 
 # Todo implement BPE from scratch with unk tokens hashed (although may achieve worse results on downstream tasks) as
