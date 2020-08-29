@@ -75,6 +75,8 @@ class SingleContextConvert(pl.LightningModule):
         return self.transformer_layers(x)
 
     def backward(self, trainer, loss, optimizer, optimizer_idx):
+        """override hook of lightning as want specific grad norm clip of only subword embedding parameters, after loss.backward()
+        but before optimizer step"""
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.subword_params, self.train_config.grad_norm_clip)
 
@@ -143,6 +145,7 @@ def _parse_args():
 
 
 def main():
+    set_seed(1)
     train_config = ConveRTTrainConfig()
     model_config = ConveRTModelConfig()
     tokenizer = SentencePieceProcessor()
