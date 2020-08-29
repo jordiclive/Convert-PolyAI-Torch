@@ -158,8 +158,8 @@ class RedditData(torch.utils.data.Dataset):
         position_ids = [i for i in range(len(input_ids))]  # list(range(len(input_ids))
 
         return EncoderInputFeature(
-            input_ids = torch.tensor(input_ids),
-            attention_mask = torch.tensor(attention_mask),
-            position_ids = torch.tensor(position_ids),
-            input_lengths = torch.tensor(len(input_ids)),
+            input_ids = torch.tensor(input_ids).to(config.device),
+            attention_mask = torch.tensor(attention_mask).to(config.device),
+            position_ids = torch.tensor(position_ids).to(config.device),
+            input_lengths = torch.tensor(len(input_ids)).to(config.device),
         )

@@ -63,13 +63,21 @@ class SingleContextConvert(pl.LightningModule):
 
         self.hparams = self.train_config._field_defaults
         self.hparams.update(self.model_config._field_defaults)
+        self.subword_params = None
 
         logger.info(
             "number of parameters: %e", sum(p.numel() for p in self.parameters())
         )
+    def register_subword_params(self):
+        self.subword_params = find_subword_params(self)[0]
 
     def forward(self, x):
         return self.transformer_layers(x)
+
+    def backward(self, trainer, loss, optimizer, optimizer_idx):
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.subword_params, self.train_config.grad_norm_clip)
+
 
     def configure_optimizers(self):
         """
@@ -124,8 +132,8 @@ def _parse_args():
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpu", type = int, default = 1)
-    parser.add_argument("--precision", type = int, default = 16)
+    parser.add_argument("--gpus", type = int, default = 1)
+    #parser.add_argument("--precision", type = int, default = 16)
     parser.add_argument("--progress_bar_refresh_rate", type = int, default = 1)
     parser.add_argument("--row_log_interval", type = int, default = 1)
 
@@ -146,6 +154,7 @@ def main():
     train_loader = dm.train_dataloader(RD)
     model = SingleContextConvert(model_config, train_config)
     lr_decay = LearningRateDecayCallback(train_config)
+    model.register_subword_params()
 
     trainer = (
         pl.Trainer.from_argparse_args(args, callbacks = [lr_decay])
