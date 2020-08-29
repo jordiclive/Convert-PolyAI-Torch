@@ -1,0 +1,7 @@
+torch==1.5.1+cu101 -f https://download.pytorch.org/whl/torch_stable.htmltqdm
+torchvision==0.6.1+cu101 -f https://download.pytorch.org/whl/torch_stable.htmltqdm
+sklearn
+tensorboard
+sentencepiece
+pytorch-lightning==0.9.0rc2
+
