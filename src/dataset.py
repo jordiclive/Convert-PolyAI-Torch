@@ -95,7 +95,7 @@ class DataModule(pl.LightningDataModule):
             config.train_batch_size,
             collate_fn = self.convert_collate_fn,
             drop_last = True,     # drop last incomplete batch
-
+            #num_workers = 8
         )
 
 
