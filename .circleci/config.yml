@@ -27,6 +27,7 @@ jobs:
             name: run linting
             when: always
             command: |
+              source .bash_profile
               pipenv run bash lint.sh
 
       - store_artifacts:
