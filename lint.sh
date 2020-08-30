@@ -39,7 +39,7 @@ echo "pytest"
 pipenv run pytest -s --ignore=tests/test_model.py tests/ || FAILURE=true
 
 echo "training evaluation"
-pipenv run python tests/test_model.py || FAILURE=true
+pipenv run python -s tests/test_model.py || FAILURE=true
 
 if [ "$FAILURE" = true ]; then
   echo "Linting failed"

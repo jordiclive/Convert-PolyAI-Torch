@@ -1,24 +1,33 @@
-import logging
-import random
+import math
 from collections import OrderedDict
+from typing import Optional, Tuple
 
-import numpy as np
-import pytorch_lightning as pl
 import torch
+import torch.nn as nn
+import torch.nn.functional as fnn
+from torch.nn.modules.normalization import LayerNorm
+import os
 
-from src.config import ConveRTModelConfig, ConveRTTrainConfig
-from src.criterion import LossFunction
+# fixme Just for jupyter
+dirname = os.path.dirname(__file__)
+os.chdir(dirname)
 
-from src.model_components import FeedForward2, TransformerLayers
+from config import ConveRTModelConfig, ConveRTTrainConfig
+from dataset import EncoderInputFeature
 
-import argparse
-from sentencepiece import SentencePieceProcessor
-from src.dataset import DataModule, RedditData, load_instances_from_reddit_json
-
-from src.lr_decay import LearningRateDecayCallback
+# start from importing some stuff
+from model_components import FeedForward1, FeedForward2, TransformerLayers
+from criterion import LossFunction
+import torch
+import logging
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import math
+import pytorch_lightning as pl
+import random
 
 logger = logging.getLogger(__name__)
-
 
 def set_seed(seed):
     random.seed(seed)
@@ -26,32 +35,46 @@ def set_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+# class LearningRateDecayCallback(pl.Callback):
+#
+#     def __init__(self, learning_rate, config,linear_part=1e4, end_part=10e7,min_step lr_decay=True):
+#         super().__init__()
+#         self.learning_rate = learning_rate
+#         self.tokens = 0
+#         self.final_tokens = final_tokens
+#         self.lr_decay = lr_decay
+#         self.warmup_tokens = linear_part*config.train_batch_size
+#         self.final_tokens = end_part*config.train_batch_size
+#         self.min_step = min_step
+#
+#     def on_train_batch_end(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
+#         optimizer = trainer.optimizers[0]
+#         _, y = batch
+#
+#         if self.lr_decay:
+#             self.tokens += (y >= 0).sum()  # number of tokens processed this step (i.e. label is not -100)
+#             if self.tokens < self.warmup_tokens:
+#                 # linear warmup
+#                 lr_mult = float(self.tokens) / float(max(1, self.warmup_tokens))
+#             else:
+#                 # cosine learning rate decay
+#                 progress = float(self.tokens - self.warmup_tokens) / float(
+#                     max(1, self.final_tokens - self.warmup_tokens))
+#                 lr_mult = max(0.1,  0.5  * (1.0 + math.cos(math.pi * progress)))
+#             lr = self.learning_rate * lr_mult
+#             if lr < self.min_step
+#                 self.lr_decay = False
+#             for param_group in optimizer.param_groups:
+#                 param_group['lr'] = lr
 
-def find_subword_params(model):
-    """Long winded helper fn to return Subword Embedding Params for clipping, as they are the only parameters that
-    are gradient clipped in the paper, only calculated once after model instantiation, but before training"""
-    embeds = set()
-    for mn, m in model.named_modules():
-        for pn, p in m.named_parameters():
-            if mn.startswith("transformer_layers.subword_embedding"):
-                fpn = "%s.%s" % (mn, pn) if mn else pn  # full param name
 
-                embeds.add(fpn)
-    param_dict = {pn: p for pn, p in model.named_parameters()}
-
-    return [param_dict[pn] for pn in sorted(list(embeds))], embeds
-
-
-# todo  need to write own
-# lightning optimizer step to include torch.nn.utils.clip_grad_norm_(find_subword_params(model), config.grad_norm_clip),
 
 
 class SingleContextConvert(pl.LightningModule):
     def __init__(
-            self, model_config: ConveRTModelConfig, train_config: ConveRTTrainConfig
+        self, model_config: ConveRTModelConfig, train_config: ConveRTTrainConfig
     ):
         super().__init__()
-
         self.model_config = model_config
         self.train_config = train_config
         self.transformer_layers = TransformerLayers(model_config)
@@ -59,52 +82,16 @@ class SingleContextConvert(pl.LightningModule):
         self.ff2_reply = FeedForward2(model_config)
         self.loss_function = LossFunction()
 
-        self.weight_decay = train_config.l2_weight_decay
-
-        self.hparams = self.train_config._field_defaults
-        self.hparams.update(self.model_config._field_defaults)
-        self.subword_params = None
-
-        logger.info(
-            "number of parameters: %e", sum(p.numel() for p in self.parameters())
-        )
-    def register_subword_params(self):
-        self.subword_params = find_subword_params(self)[0]
+        logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
     def forward(self, x):
         return self.transformer_layers(x)
 
-    def backward(self, trainer, loss, optimizer, optimizer_idx):
-        """override hook of lightning as want specific grad norm clip of only subword embedding parameters, after loss.backward()
-        but before optimizer step"""
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.subword_params, self.train_config.grad_norm_clip)
-
-
     def configure_optimizers(self):
-        """
-        here I did not implement weight decay on bias and Layernorm layers as is typical in modern  NLP papers.
-        I do not think the paper specified params to avoid weight decay on
-        :return:
-        :rtype:
-        """
-        # create the optimizer, here I did not implement weight decay on bias and weight as is customary in modern
-        # NLP papers.
-        no_decay = ["bias", "LayerNorm.weight"]
-        params_decay = [
-            p for n, p in self.named_parameters() if not any(nd in n for nd in no_decay)
-        ]
-        params_nodecay = [
-            p for n, p in self.named_parameters() if any(nd in n for nd in no_decay)
-        ]
-        optim_groups = [
-            {"params": params_decay, "weight_decay": self.hparams.l2_weight_decay},
-            {"params": params_nodecay, "weight_decay": 0.0},
-        ]
-        optimizer = torch.optim.AdamW(
-            optim_groups, lr = self.hparams.learning_rate
-        )
+        #todo annealing? param decay, not sure how want if they have restarts? how important. do mention linear part
+        optimizer = torch.optim.AdamW(self.parameters(),lr=train_config.learning_rate) # min 0.0001
         return optimizer
+
 
     def training_step(self, batch, batch_idx):
         batch_context = batch.context
@@ -116,13 +103,14 @@ class SingleContextConvert(pl.LightningModule):
 
         loss = self.loss_function(hx, hy)
 
-        tqdm_dict = {"train_loss": loss}
-        output = OrderedDict(
-            {"loss": loss, "progress_bar": tqdm_dict, "log": tqdm_dict}
-        )
-        # result = pl.TrainResult(minimize=loss, checkpoint_on=loss)
-        # result.log("train_loss", loss)
-        return output
+        # tqdm_dict = {"train_loss": loss}
+        # output = OrderedDict(
+        #     {"loss": loss, "progress_bar": tqdm_dict, "log": tqdm_dict}
+        # )
+        result = pl.TrainResult(minimize = loss, checkpoint_on = loss)
+        result.log('train_loss', loss)
+        return result
+
 
     def validation_step(self, batch, batch_idx):
         output = self.training_step(batch, batch_idx)
@@ -130,40 +118,55 @@ class SingleContextConvert(pl.LightningModule):
         return val_output
 
 
-def _parse_args():
-    """Parse command-line arguments."""
-
-    parser = argparse.ArgumentParser()
-    #parser.add_argument("--gpus", type = int, default = 1)
-    #parser.add_argument("--precision", type = int, default = 16)
-    parser.add_argument("--progress_bar_refresh_rate", type = int, default = 1)
-    parser.add_argument("--row_log_interval", type = int, default = 1)
-
-    args = parser.parse_args()
-
-    return args
-
-
-def main(**kwargs):
-    set_seed(1)
-    train_config = ConveRTTrainConfig()
-    model_config = ConveRTModelConfig()
-    tokenizer = SentencePieceProcessor()
-    args = _parse_args()
-    tokenizer.Load(train_config.sp_model_path)
-    train_instances = load_instances_from_reddit_json(train_config.dataset_path)
-    RD = RedditData(train_instances, tokenizer, 60)
-    dm = DataModule()
-    train_loader = dm.train_dataloader(RD)
-    model = SingleContextConvert(model_config, train_config)
-    lr_decay = LearningRateDecayCallback(train_config)
-    model.register_subword_params()
-
-    trainer = (
-        pl.Trainer.from_argparse_args(args, callbacks = [lr_decay],**kwargs)
-    )  # ,checkpoint_callback = checkpoint_callback)  # ,resume_from_checkpoint=)
-    trainer.fit(model, train_dataloader = train_loader, val_dataloaders = train_loader)
 
 
 if __name__ == "__main__":
-    main(fast_dev_run=True)
+    from sentencepiece import SentencePieceProcessor
+    from dataset import DataModule, RedditData, load_instances_from_reddit_json
+
+    # from pytorch_lightning.callbacks import ModelCheckpoint
+    # checkpoint_callback = ModelCheckpoint(filepath = 'CHECKPOINTS', verbose = True, monitor = 'val_loss', mode = 'min')
+    train_config = ConveRTTrainConfig()
+    model_config = ConveRTModelConfig()
+    tokenizer = SentencePieceProcessor()
+    tokenizer.Load(train_config.sp_model_path)
+    train_instances = load_instances_from_reddit_json(train_config.dataset_path)
+    RD = RedditData(train_instances, tokenizer,60)
+    dm = DataModule()
+    train_loader = dm.train_dataloader(RD)
+
+    model = SingleContextConvert(model_config, train_config)
+    #print([p for p in model.named_parameters()])
+    Total = sum(p.numel() for p in model.parameters())
+
+    print(
+        f"{Total:,}"
+    )  # 27,478,744 (16M + 13M) so less paramters, makes sense maybe because  embedding was different.
+    print(
+        f"{Total-12829692:,}" # maybe only including shared part.
+    )
+
+    print(
+        f"{Total-29000000:,}"
+    )
+    print("grad_total", sum(p.numel() for p in model.parameters() if p.requires_grad))
+
+    # optimizer = torch.optim.AdamW(model.parameters(), lr = train_config.learning_rate)
+    # for batch in train_loader:
+    #     batch_context = batch.context
+    #     batch_reply = batch.reply
+    #     rx = model(batch_context)
+    #     ry = model(batch_reply)
+    #     hx = model.ff2_context(rx, batch_context.attention_mask)
+    #     hy = model.ff2_reply(ry, batch_reply.attention_mask)
+    #     loss = model.loss_function(hx, hy)
+    #     loss.backward()
+    #     break
+    # bias = model.transformer_layers.transformer_layers[0].self_attention.bias
+    # print(bias.grad) # does change.
+
+    # # only saves best
+    # trainer = (
+    #     pl.Trainer()
+    # )  # ,checkpoint_callback = checkpoint_callback)  # ,resume_from_checkpoint=)
+    # trainer.fit(model, train_dataloader=train_loader, val_dataloaders=train_loader)

@@ -1,20 +1,31 @@
 import math
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as fnn
 from torch.nn.modules.normalization import LayerNorm
+import os
+
+# #fixme Just for jupyter
+# dirname= os.path.dirname(__file__)
+# os.chdir(dirname)
 
 from src.config import ConveRTModelConfig
 from src.dataset import EncoderInputFeature
+
+# start from importing some stuff
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import math
 
 
 
 
 def circulant_mask(n: int, window: int) -> torch.Tensor:
-    """ Calculate the relative attention mask, calculated once when model instatiated, as a subset of this matrix
-        will be used for a input length less than max.
+    """ Calculate the relative attention mask
         i,j represent relative token positions in this matrix and in the attention scores matrix,
          this mask enables attention scores to be set to 0 if further than the specified window length
 
@@ -22,6 +33,7 @@ def circulant_mask(n: int, window: int) -> torch.Tensor:
             :param window: [window length],
             :return relative attention mask
     """
+    #todo sort out GPU for this tensor, do not register as different every batch unless pad all inputs to be of size 60
     circulant_t = torch.zeros(n, n)
     # [0, 1, 2, ..., window, -1, -2, ..., window]
     offsets = [0] + [i for i in range(window + 1)] + [-i for i in range(window + 1)]
@@ -29,7 +41,7 @@ def circulant_mask(n: int, window: int) -> torch.Tensor:
         return torch.ones(n, n)
     for offset in offsets:
         # size of the 1-tensor depends on the length of the diagonal
-        circulant_t.diagonal(offset=offset).copy_(torch.ones(n - abs(offset)))
+        circulant_t.diagonal(offset = offset).copy_(torch.ones(n - abs(offset)))
     return circulant_t
 
 
@@ -43,12 +55,12 @@ class SubwordEmbedding(nn.Module):
         super().__init__()
         self.subword_embed = nn.Embedding(
             config.vocab_size, config.num_embed_hidden
-        )  #eg. 25000 x 512
+        )  # 10000 x512, bpe is 10000
         self.m1_positional_embed = nn.Embedding(47, config.num_embed_hidden)
         self.m2_positional_embed = nn.Embedding(11, config.num_embed_hidden)
 
     def forward(
-        self, input_ids: torch.Tensor, position_ids: torch.Tensor
+            self, input_ids: torch.Tensor, position_ids: torch.Tensor
     ) -> torch.Tensor:
         """Subword Embedding and Positional encoding, takes in sequence of sub words, calculates
         subword embeddings and adds positional encodings
@@ -64,22 +76,27 @@ class SubwordEmbedding(nn.Module):
         :rtype: torch.Tensor
 
         """
+        # believe correct implementation. embedding when called. takes the row corresponding to the
+        # number of element and stacks it in matrix.
+        # #fixme pids= tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13,  0,  0,  0,  0..]
+        # this is one example, each position will have an embedding representation of that token.
+        # each position will produce a different positional encoding to add to the embedding for the token.
+        # torch.fmod(pids,11)  [ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10,  0,  1,  2,  0,  0,  0,
+        # will do for the whole batch
         subword_embed = self.subword_embed.forward(
             input_ids
-        )  # B x T x d_emb eg. 64 x 47 x 512
+        )  # 64 x 47 x 512 (B x T x 512
         m1_positional_embed = self.m1_positional_embed.forward(
             torch.fmod(position_ids, 47)
         )
         m2_positional_embed = self.m2_positional_embed.forward(
             torch.fmod(position_ids, 11)
-        )  # B x T x d_emb
+        )  # 64 x 47 x 512
         embedding = subword_embed + m1_positional_embed + m2_positional_embed
         return embedding
 
 
-class SelfAttention(
-    nn.Module
-):
+class SelfAttention(nn.Module): # bulk of params in these 6 layers. maybe with relative attention, can get rid of params sparse query key value matrices
     """normal query, key, value based self attention but with relative attention functionality
      and a learnable bias encoding relative token position which is added to the attention scores before the softmax"""
 
@@ -96,28 +113,24 @@ class SelfAttention(
         self.key = nn.Linear(config.num_embed_hidden, config.num_attention_project)
         self.value = nn.Linear(config.num_embed_hidden, config.num_attention_project)
 
-        self.softmax = nn.Softmax(dim=-1)
+        self.softmax = nn.Softmax(dim = -1)
         self.output_projection = nn.Linear(
             config.num_attention_project, config.num_embed_hidden
         )
-        self.bias = torch.nn.Parameter(torch.randn(config.n), requires_grad=True)
+        self.bias = torch.nn.Parameter(torch.randn(config.n), requires_grad = True)
         stdv = 1.0 / math.sqrt(self.bias.data.size(0))
         self.bias.data.uniform_(-stdv, stdv)
         self.relative_attention = relative_attention
         self.n = self.config.n
         self.half_n = self.n // 2
-        self.register_buffer(
-            "relative_mask",
-            circulant_mask(config.token_sequence_truncation, self.relative_attention),
-        )
 
     def forward(
-        self, attn_input: torch.Tensor, attention_mask: torch.Tensor
+            self, attn_input: torch.Tensor, attention_mask: torch.Tensor
     ) -> torch.Tensor:
         """ calculate self-attention of query, key and weighted to value at the end.
         self-attention input is projected by linear layer at the first time.
         applying attention mask for ignore pad index attention weight. Relative attention mask
-        applied and a learnable bias added to the attention scores.
+        appied and a Learnable bias added to the attention scores.
         return value after apply output projection layer to value * attention
 
         :param attn_input: [description]
@@ -128,12 +141,12 @@ class SelfAttention(
         :rtype: [type]
         """
         self.T = attn_input.size()[1]
-        # input is B x max seq len x n_emb
+        # input is B x max seq len x 512
         _query = self.query.forward(attn_input)
         _key = self.key.forward(attn_input)
         _value = self.value.forward(attn_input)
 
-        # scaled dot product
+        # scaled dot product (https://www.aclweb.org/anthology/N18-2074.pdf Fig.2)
         attention_scores = torch.matmul(_query, _key.transpose(1, 2))
         attention_scores = attention_scores / math.sqrt(
             self.config.num_attention_project
@@ -145,17 +158,13 @@ class SelfAttention(
         extended_attention_mask = (1.0 - attention_mask.unsqueeze(-1)) * -10000.0
         attention_scores = attention_scores + extended_attention_mask
 
+        # relative line
+        attention_scores = attention_scores + (
+                (1.0 - circulant_mask(self.T, self.relative_attention)) * -10000.0
+        ).unsqueeze(0)
 
-        # fix circulant_matrix to matrix of size 60 x60 (max token truncation_length,
-        # register as buffer, so not keep creating masks of different sizes.
-
-        attention_scores = attention_scores.masked_fill(
-            self.relative_mask.unsqueeze(0)[:, : self.T, : self.T] == 0, float("-inf")
-        )
-
-        # Learnable bias vector is used of max size,for each i, different subsets of it are added to the scores, where the permutations
-        # depend on the relative position (i-j). this way cleverly allows no loops. bias vector is 2*max truncation length+1
-        # so has a learnable parameter for each eg. (i-j) /in {-60,...60} .
+        # attention scores is B x max_seq_len x max_seq_len
+        # adding bias score
 
         ii, jj = torch.meshgrid(torch.arange(self.T), torch.arange(self.T))
         B_matrix = self.bias[self.n // 2 - ii + jj]
@@ -175,7 +184,7 @@ class FeedForward1(nn.Module):
         standard FFN layer also used by Vaswani et al. (2017),"""
 
     def __init__(
-        self, input_hidden: int, intermediate_hidden: int, dropout_rate: float = 0.0
+            self, input_hidden: int, intermediate_hidden: int, dropout_rate: float = 0.0
     ):
         #          512         2048
         """
@@ -195,12 +204,12 @@ class FeedForward1(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """forward through fully-connected 2-layer
 
-        :param x: F input
+        :param x: fnn input
         :type x: torch.Tensor
-        :return: return F output
+        :return: return fnn output
         :rtype: torch.Tensor
         """
-        x = F.gelu(self.linear_1(x))
+        x = fnn.gelu(self.linear_1(x))
         return self.linear_2(self.dropout(x))
 
 
@@ -245,23 +254,28 @@ class SharedInnerBlock(nn.Module):
 
         """
         # think better practice to relabel same var , although is more confusing to read.
-        x = x + self.self_attention(x, attention_mask=attention_mask)
+        x = x + self.self_attention(x,attention_mask=attention_mask)
         x = self.norm2(x)
         x = x + self.ff1(x)
         return self.norm2(x)
 
-
-
+        # self_attn_output = self.self_attention(
+        #     embed_output, attention_mask = attention_mask
+        # )
+        #
+        # norm1_output = self.norm1(self_attn_output + embed_output)
+        #
+        # ff1_output = self.ff1(norm1_output)
+        # norm2_output = self.norm2(ff1_output + norm1_output)
+        # return norm2_output
 
 # pretty basic, just single head. but done many times, stack to have another dimension (4 with batches).# so get stacks of B x H of attention scores T x T..
 # then matrix multiply these extra stacks with the v
 # (B xnh)x T xT . (Bx nh xTx hs) gives (B Nh) T x hs stacks. now  hs is set to be final dimension/ number of heads, so reorder the stacks (concatenating them)
-# can have optional extra projection layer, but doing that later
-
+ #original paper can have optional extra projection layer, but doing that anyway later
 
 class MultiheadAttention(nn.Module):
-    """Standard non causal MHA, Half Hugging Face/Half Andrej Karpathy implementation,
-     no need to mask as after previous layers"""
+    """Standard non causal MHA, Half Hugging Face/Half Karpathy implementation, no need to mask as after previous layers"""
 
     def __init__(self, config: ConveRTModelConfig):
         super().__init__()
@@ -277,25 +291,16 @@ class MultiheadAttention(nn.Module):
         self.dropout = nn.Dropout(config.dropout_rate)
 
     def forward(
-        self, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor] = None
+            self, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         B, T, _ = hidden_states.size()
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        k = (
-            self.key(hidden_states)
-            .view(B, T, self.num_attention_heads, self.attention_head_size)
-            .transpose(1, 2)
-        )  # (B, nh, T, hs)
-        q = (
-            self.query(hidden_states)
-            .view(B, T, self.num_attention_heads, self.attention_head_size)
-            .transpose(1, 2)
-        )  # (B, nh, T, hs)
-        v = (
-            self.value(hidden_states)
-            .view(B, T, self.num_attention_heads, self.attention_head_size)
-            .transpose(1, 2)
-        )  # (B, nh, T, hs)
+        k = self.key(hidden_states).view(B, T, self.num_attention_heads, self.attention_head_size).transpose(1,
+                                                                                                             2)  # (B, nh, T, hs)
+        q = self.query(hidden_states).view(B, T, self.num_attention_heads, self.attention_head_size).transpose(1,
+                                                                                                               2)  # (B, nh, T, hs)
+        v = self.value(hidden_states).view(B, T, self.num_attention_heads, self.attention_head_size).transpose(1,
+                                                                                                               2)  # (B, nh, T, hs)
 
         attention_scores = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
 
@@ -305,7 +310,7 @@ class MultiheadAttention(nn.Module):
 
             attention_scores = attention_scores + attention_mask
 
-        attention_scores = F.softmax(attention_scores, dim=-1)
+        attention_scores = F.softmax(attention_scores, dim = -1)
 
         attention_scores = self.dropout(attention_scores)
 
@@ -321,11 +326,11 @@ class TransformerLayers(nn.Module):
         super().__init__()
         self.config = config
 
-        self.subword_embedding = SubwordEmbedding(config)
+        self.subword_embedding = SubwordEmbedding(config) #12,829,692 params
         self.transformer_layers = nn.ModuleList(
             [SharedInnerBlock(config, window) for window in config.relative_attns]
-        )
-        self.MHA = MultiheadAttention(config)
+        ) # 13,401,942
+        self.MHA = MultiheadAttention(config)  #1,575,936
 
     def forward(self, encoder_input: EncoderInputFeature) -> torch.Tensor:
         input_ids = encoder_input.input_ids
@@ -352,8 +357,13 @@ class FeedForward2(
         :param dropout_rate: dropout rate, defaults to None
         :type dropout_rate: float, optional
         """
-        # paper specifies,skip connections,layer normalization, and orthogonal initialization
-
+        #todo orthogonal initialization
+        #with skip connections,
+        #layer
+        #normalization, and orthogonal
+        #initialization
+        # not much details , so presume no activation function at end. as want it to represent something. maybe no layernorm is warranted at beginning
+        # not sure if want bias, this torch works out of box, random orthogonal matrix, square as all layers are same neurons
         super().__init__()
         # 3,679,744 x2 params
         self.linear_1 = nn.Linear(
@@ -367,32 +377,73 @@ class FeedForward2(
         # )
         self.norm1 = LayerNorm(config.feed_forward2_hidden)
         self.norm2 = LayerNorm(config.feed_forward2_hidden)
-        # self.norm3 = LayerNorm(config.feed_forward2_hidden)
+        #self.norm3 = LayerNorm(config.feed_forward2_hidden)
         self.final = nn.Linear(config.feed_forward2_hidden, config.num_embed_hidden)
-        self.orthogonal_initialization() # torch implementation works perfectly out the box,
+        self.orthogonal_initialization()
 
     def orthogonal_initialization(self):
-        for l in [
-            self.linear_1,
-            self.linear_2,
-        ]:  # self.linear_3]:
-            torch.nn.init.orthogonal_(l.weight)
+            for l in [self.linear_1,self.linear_2,]:#self.linear_3]:
+                torch.nn.init.orthogonal_(l.weight)
 
-    def forward(self, x: torch.Tensor, attn_msk: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, attn_msk) -> torch.Tensor:
         sentence_lengths = attn_msk.sum(1)
+        # adding square root reduction projection separately as not shared. torch.Size([64, 50, 1024])
 
-        # adding square root reduction projection separately as not a shared.
-        # part of the diagram torch.Size([64, 50, 1024])
+         #x is 64 47 1024
+        norms = 1 / torch.sqrt(sentence_lengths.double()).float() # 64
+        x = norms.unsqueeze(1) * torch.sum(x, dim = 1) # 64 x1024
 
-        # x has dims B x T x 2*d_emb
-        norms = 1 / torch.sqrt(sentence_lengths.double()).float()  # 64
-        x = norms.unsqueeze(1) * torch.sum(x, dim=1)  # 64 x1024
+        x = x + fnn.gelu(self.linear_1(self.norm1(x)))
+        x = x + fnn.gelu(self.linear_2(self.norm2(x)))
+        #x = x + fnn.gelu(self.linear_3(self.norm3(x)))
 
-        x = x + F.gelu(self.linear_1(self.norm1(x)))
-        x = x + F.gelu(self.linear_2(self.norm2(x)))
-        # x = x + F.gelu(self.linear_3(self.norm3(x)))
 
-        return F.normalize(self.final(x), dim=1, p=2)  # 64 512
+        return fnn.normalize(self.final(x), dim = 1, p = 2) # 64 512
 
+
+if __name__ == '__main__':
+
+    from src.config import *
+    from src.dataset import *
+
+    args = ConveRTTrainConfig()
+    tokenizer = SentencePieceProcessor()
+    tokenizer.Load(args.sp_model_path)
+    u = load_instances_from_reddit_json(args.dataset_path)
+    RD = RedditData(u, tokenizer, 60)
+    SE = SubwordEmbedding(ConveRTModelConfig())
+    Total = sum(p.numel() for p in SE.parameters())
+    model_config = ConveRTModelConfig()
+    print(
+        f"{Total:,}"
+    )  # 12,829,696
+    Tls = TransformerLayers(model_config)
+    Total = sum(p.numel() for p in Tls.parameters())
+    print(
+        f"{Total:,}"
+    )
+    ff2 = FeedForward2(model_config)
+    Total = sum(p.numel() for p in ff2.parameters())
+    print(
+        f"{Total:,}"
+    )
+
+
+    # 12,
+    # dm = DataModule()
+    # train_loader = dm.train_dataloader(RD)
+    # iterat = iter(train_loader)
+    # batch = next(iterat)
+    # batch_context = batch.context
+    # batch_reply = batch.reply
+    #
+    # tls  = TransformerLayers(model_config)
+    # ff2_context = FeedForward2(model_config)
+    # ff2_reply = FeedForward2(model_config)
+    # rx = tls(batch_context)
+    # ry = tls(batch_reply)
+    # hx = ff2_context(rx, batch_context.attention_mask)
+    # hy = ff2_reply(ry, batch_reply.attention_mask)
+    # print(torch.norm(hx[3]))
 
 
