@@ -103,13 +103,13 @@ class SingleContextConvert(pl.LightningModule):
 
         loss = self.loss_function(hx, hy)
 
-        # tqdm_dict = {"train_loss": loss}
-        # output = OrderedDict(
-        #     {"loss": loss, "progress_bar": tqdm_dict, "log": tqdm_dict}
-        # )
-        result = pl.TrainResult(minimize = loss, checkpoint_on = loss)
-        result.log('train_loss', loss)
-        return result
+        tqdm_dict = {"train_loss": loss}
+        output = OrderedDict(
+            {"loss": loss, "progress_bar": tqdm_dict, "log": tqdm_dict}
+        )
+        # result = pl.TrainResult(minimize = loss, checkpoint_on = loss)
+        # result.log('train_loss', loss)
+        return output
 
 
     def validation_step(self, batch, batch_idx):
@@ -137,19 +137,19 @@ if __name__ == "__main__":
 
     model = SingleContextConvert(model_config, train_config)
     #print([p for p in model.named_parameters()])
-    Total = sum(p.numel() for p in model.parameters())
+    # Total = sum(p.numel() for p in model.parameters())
 
-    print(
-        f"{Total:,}"
-    )  # 27,478,744 (16M + 13M) so less paramters, makes sense maybe because  embedding was different.
-    print(
-        f"{Total-12829692:,}" # maybe only including shared part.
-    )
+    # print(
+    #     f"{Total:,}"
+    # )  # 27,478,744 (16M + 13M) so less paramters, makes sense maybe because  embedding was different.
+    # print(
+    #     f"{Total-12829692:,}" # maybe only including shared part.
+    # )
 
-    print(
-        f"{Total-29000000:,}"
-    )
-    print("grad_total", sum(p.numel() for p in model.parameters() if p.requires_grad))
+    # print(
+    #     f"{Total-29000000:,}"
+    # )
+    # print("grad_total", sum(p.numel() for p in model.parameters() if p.requires_grad))
 
     # optimizer = torch.optim.AdamW(model.parameters(), lr = train_config.learning_rate)
     # for batch in train_loader:
@@ -165,8 +165,6 @@ if __name__ == "__main__":
     # bias = model.transformer_layers.transformer_layers[0].self_attention.bias
     # print(bias.grad) # does change.
 
-    # # only saves best
-    # trainer = (
-    #     pl.Trainer()
-    # )  # ,checkpoint_callback = checkpoint_callback)  # ,resume_from_checkpoint=)
-    # trainer.fit(model, train_dataloader=train_loader, val_dataloaders=train_loader)
+    # only saves best
+    trainer = pl.Trainer(gpus=1) # ,checkpoint_callback = checkpoint_callback)  # ,resume_from_checkpoint=)
+    trainer.fit(model, train_dataloader=train_loader, val_dataloaders=train_loader)

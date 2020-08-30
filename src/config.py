@@ -18,7 +18,7 @@ class ConveRTModelConfig(NamedTuple):
     n: int = 121
     relative_attns: list = [3, 5, 48, 48, 48, 48]
     num_attention_heads: int = 2
-
+    device: str = 'cuda'
 
 
 class ConveRTTrainConfig(NamedTuple):
@@ -26,7 +26,7 @@ class ConveRTTrainConfig(NamedTuple):
     sp_model_path: str = os.path.join(dirname, "data/en.wiki.bpe.vs25000.model")
     dataset_path: str = os.path.join(dirname, "data/sample-dataset.json")
     test_dataset_path: str = "data/sample-dataset.json"
-
+    device: str = 'cuda'
     model_save_dir: str = "logs/models/"
     log_dir: str = "logs"
     device: str = "cuda:0"

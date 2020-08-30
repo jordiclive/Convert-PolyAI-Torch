@@ -42,6 +42,7 @@ def circulant_mask(n: int, window: int) -> torch.Tensor:
     for offset in offsets:
         # size of the 1-tensor depends on the length of the diagonal
         circulant_t.diagonal(offset = offset).copy_(torch.ones(n - abs(offset)))
+        circulant_t.to('cuda')
     return circulant_t
 
 
@@ -161,7 +162,7 @@ class SelfAttention(nn.Module): # bulk of params in these 6 layers. maybe with r
         # relative line
         attention_scores = attention_scores + (
                 (1.0 - circulant_mask(self.T, self.relative_attention)) * -10000.0
-        ).unsqueeze(0)
+        ).unsqueeze(0).to('cuda')
 
         # attention scores is B x max_seq_len x max_seq_len
         # adding bias score
