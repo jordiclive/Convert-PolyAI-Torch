@@ -36,7 +36,7 @@ pipenv run isort -rc src || FAILURE=true
 ##flake8 src || FAILURE=true
 
 echo "pytest"
-pipenv run pytest -s tests/ || FAILURE=true
+pipenv run pytest -s --ignore=tests/test_model.py tests/ || FAILURE=true
 
 echo "training evaluation"
 pipenv pipenv run python tests/test_model.py || FAILURE=true
