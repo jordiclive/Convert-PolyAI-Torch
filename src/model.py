@@ -6,14 +6,14 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 
-from config import ConveRTModelConfig, ConveRTTrainConfig
-from criterion import LossFunction
+from src.config import ConveRTModelConfig, ConveRTTrainConfig
+from src.criterion import LossFunction
 
-from model_components import FeedForward2, TransformerLayers
+from src.model_components import FeedForward2, TransformerLayers
 
 import argparse
 from sentencepiece import SentencePieceProcessor
-from dataset import DataModule, RedditData, load_instances_from_reddit_json
+from src.dataset import DataModule, RedditData, load_instances_from_reddit_json
 
 from src.lr_decay import LearningRateDecayCallback
 
@@ -134,7 +134,7 @@ def _parse_args():
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpus", type = int, default = 1)
+    #parser.add_argument("--gpus", type = int, default = 1)
     #parser.add_argument("--precision", type = int, default = 16)
     parser.add_argument("--progress_bar_refresh_rate", type = int, default = 1)
     parser.add_argument("--row_log_interval", type = int, default = 1)
@@ -144,7 +144,7 @@ def _parse_args():
     return args
 
 
-def main():
+def main(**kwargs):
     set_seed(1)
     train_config = ConveRTTrainConfig()
     model_config = ConveRTModelConfig()
@@ -160,10 +160,10 @@ def main():
     model.register_subword_params()
 
     trainer = (
-        pl.Trainer.from_argparse_args(args, callbacks = [lr_decay])
+        pl.Trainer.from_argparse_args(args, callbacks = [lr_decay],**kwargs)
     )  # ,checkpoint_callback = checkpoint_callback)  # ,resume_from_checkpoint=)
     trainer.fit(model, train_dataloader = train_loader, val_dataloaders = train_loader)
 
 
 if __name__ == "__main__":
-    main()
+    main(fast_dev_run=True)
