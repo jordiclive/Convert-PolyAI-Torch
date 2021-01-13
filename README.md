@@ -30,7 +30,6 @@ Note: this is only for the single context model for the moment.
 
 - [ ] Finish optimizing on a few batches, efficiency checks (apex fused optimizer etc.)
 - [ ] write further training evaluation tests, Continuous Integration tests, artifacts.
-- [ ] contact authors where clarification is needed
 - [ ] Write new apache beam Dataflow script, find cheapest way to store on GCP bucket 
 - [ ] work out tmp/ file transfer bash scripts during training for logs and checkpoints . GCSFuse
 - [ ] more advanced quantization akin to original paper
